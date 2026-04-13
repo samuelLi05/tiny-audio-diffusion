@@ -24,8 +24,8 @@ matplotlib
 ipykernel
 gradio
 
-# k-diffusion
-# v-diffusion-pytorch
+k-diffusion
+v-diffusion-pytorch
 
 audio-diffusion-pytorch==0.1.3
 audio-encoders-pytorch
