@@ -6,10 +6,13 @@ from pytorch_lightning.loggers import LoggerCollection, WandbLogger
 from audio_diffusion_pytorch import UNetV0, VDiffusion, VSampler, LTPlugin
 
 import random
+from pathlib import Path
 from typing import Any, List, Optional
 
+import numpy as np
 import plotly.graph_objs as go
 import pytorch_lightning as pl
+import soundfile as sf
 import torch
 import torchaudio
 import wandb
@@ -17,8 +20,9 @@ import wandb
 from einops import rearrange
 from ema_pytorch import EMA
 from pytorch_lightning import Callback, Trainer
+from scipy.signal import resample_poly
 from torch import Tensor, nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 
 """ Model """
@@ -113,20 +117,96 @@ class Datamodule(pl.LightningDataModule):
         self.data_train, self.data_val = fractional_random_split(self.dataset, split)
 
     def get_dataloader(self, dataset) -> DataLoader:
-        return DataLoader(
-            dataset=dataset,            
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            shuffle=True,
-            prefetch_factor=2,
-        )
+        dataloader_kwargs = {
+            "dataset": dataset,
+            "batch_size": self.batch_size,
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "shuffle": True,
+        }
+        if self.num_workers > 0:
+            dataloader_kwargs["prefetch_factor"] = 2
+            dataloader_kwargs["persistent_workers"] = True
+
+        return DataLoader(**dataloader_kwargs)
 
     def train_dataloader(self) -> DataLoader:
         return self.get_dataloader(self.data_train)
 
     def val_dataloader(self) -> DataLoader:
         return self.get_dataloader(self.data_val)
+
+
+class NsynthWavDataset(Dataset):
+    """Simple local WAV dataset for Nsynth subsets using soundfile decoding.
+
+    This avoids torchaudio's decoding backend, which can fail in environments
+    missing torchcodec/ffmpeg runtime libs.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        sample_rate: int,
+        crop_size: int,
+        stereo: bool = True,
+        recursive: bool = True,
+    ) -> None:
+        super().__init__()
+        self.path = Path(path)
+        self.sample_rate = sample_rate
+        self.crop_size = crop_size
+        self.stereo = stereo
+
+        if recursive:
+            self.file_paths = sorted(self.path.rglob("*.wav"))
+        else:
+            self.file_paths = sorted(self.path.glob("*.wav"))
+
+        if not self.file_paths:
+            raise RuntimeError(f"No .wav files found in {self.path}")
+
+    def __len__(self) -> int:
+        return len(self.file_paths)
+
+    def _resample(self, audio: np.ndarray, source_rate: int) -> np.ndarray:
+        if source_rate == self.sample_rate:
+            return audio
+
+        gcd = np.gcd(source_rate, self.sample_rate)
+        up = self.sample_rate // gcd
+        down = source_rate // gcd
+        return resample_poly(audio, up=up, down=down, axis=1)
+
+    def _to_channels(self, audio: np.ndarray) -> np.ndarray:
+        channels = 2 if self.stereo else 1
+        if audio.shape[0] == channels:
+            return audio
+        if channels == 1:
+            return np.mean(audio, axis=0, keepdims=True)
+        if audio.shape[0] == 1:
+            return np.repeat(audio, repeats=2, axis=0)
+        return audio[:2]
+
+    def _crop_or_pad(self, audio: np.ndarray) -> np.ndarray:
+        length = audio.shape[1]
+        if length > self.crop_size:
+            start = random.randint(0, length - self.crop_size)
+            return audio[:, start : start + self.crop_size]
+        if length < self.crop_size:
+            pad_width = self.crop_size - length
+            return np.pad(audio, ((0, 0), (0, pad_width)), mode="constant")
+        return audio
+
+    def __getitem__(self, index: int) -> Tensor:
+        file_path = self.file_paths[index]
+        audio, source_rate = sf.read(str(file_path), dtype="float32", always_2d=True)
+        audio = audio.T
+        audio = self._to_channels(audio)
+        audio = self._resample(audio, source_rate)
+        audio = self._crop_or_pad(audio)
+        audio = np.clip(audio, -1.0, 1.0)
+        return torch.from_numpy(audio).float()
 
 
 """ Callbacks """
@@ -222,6 +302,10 @@ class SampleLogger(Callback):
     def on_validation_batch_start(
         self, trainer, pl_module, batch, batch_idx, dataloader_idx
     ):
+        # Skip expensive sample generation during Lightning sanity checking.
+        if getattr(trainer, "sanity_checking", False):
+            return
+
         if self.log_next and trainer.logger: # only log if logger present in config
             self.log_sample(trainer, pl_module, batch)
             self.log_next = False
@@ -233,7 +317,12 @@ class SampleLogger(Callback):
             pl_module.eval()
 
         # Get wandb logger
-        wandb_logger = get_wandb_logger(trainer).experiment
+        wandb_pl_logger = get_wandb_logger(trainer)
+        if wandb_pl_logger is None:
+            if is_train:
+                pl_module.train()
+            return
+        wandb_logger = wandb_pl_logger.experiment
 
         model = pl_module.model
 

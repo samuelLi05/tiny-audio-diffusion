@@ -121,7 +121,19 @@ The model architecture has been constructed with [PyTorch Lightning](https://lig
 
 [`exp/drum_diffusion.yaml`](exp/drum_diffusion.yaml) contains the default model configuration. Additional custom model configurations can be added to the [`exp`](exp/) folder.
 
-Custom models can be trained or fine-tuned on custom datasets. Datasets should consist of a folder of `.wav` audio files with a 44.1kHz sampling rate.
+Custom models can be trained or fine-tuned on custom datasets. Datasets should consist of a folder of `.wav` audio files at the sampling rate used by the training config.
+
+For a quick Nsynth baseline, this repository now includes a small export script that downloads a single instrument family from [jg583/NSynth](https://huggingface.co/datasets/jg583/NSynth), writes it into a normal local WAV folder, and keeps the existing training loop unchanged. The default baseline uses the `guitar` family, duplicates the mono source to stereo, and resamples to 16kHz so training is lighter-weight.
+
+```bash
+python scripts/prepare_nsynth_subset.py --family guitar --max-items 512 --output-dir data/nsynth_guitar/wav_dataset
+```
+
+You can also reduce dataset variance by constraining exports to a specific instrument identity and note range. For example:
+
+```bash
+python scripts/prepare_nsynth_subset.py --family guitar --instrument-str guitar_electronic_011 --pitch-min 45 --pitch-max 70 --velocity-min 75 --output-dir data/nsynth_guitar_tight/wav_dataset --max-items 512
+```
 
 To train or finetune models, run one of the following commands in the terminal from the repo's root folder and replace `<path/to/your/train/data>` with the path to your custom training set.
 
@@ -140,6 +152,22 @@ python train.py exp=drum_diffusion datamodule.dataset.path=<path/to/your/train/d
 python train.py exp=drum_diffusion trainer.gpus=1 datamodule.dataset.path=<path/to/your/train/data>
 ```
 
+**Train the Nsynth guitar baseline on GPU:**
+
+```bash
+python train.py exp=nsynth_guitar trainer.gpus=1
+```
+
+If you do not want Weights & Biases logging, use `exp=nsynth_guitar_no_wandb` instead.
+
+If you have more available VRAM and want a larger U-Net, use:
+
+```bash
+python train.py exp=nsynth_guitar_large_no_wandb trainer.gpus=1
+```
+
+W&B-enabled variant: `exp=nsynth_guitar_large`.
+
 *NOTE:* To use this repo with a GPU, you must have a CUDA-capable GPU and have the CUDA toolkit installed specific to your system (ex. Linux, x86_64, WSL-Ubuntu). More information can be found [here](https://developer.nvidia.com/cuda-toolkit).
 
 
@@ -154,6 +182,8 @@ python train.py exp=drum_diffusion trainer.gpus=1 +ckpt=</path/to/checkpoint.ckp
 ## Dataset
 
 The data used to train the checkpoints listed above can be found on [🤗 Hugging Face](https://huggingface.co/datasets/crlandsc/tiny-audio-diffusion-drums).
+
+The Nsynth baseline in this repository uses [jg583/NSynth](https://huggingface.co/datasets/jg583/NSynth), filtered down to a single family so the model can be trained quickly on a small subset before trying broader instrument coverage.
 
 ***Note:*** *This is a small and unbalanced dataset consisting of free samples that I had from my music production. These samples are not covered under the MIT license of this repository and cannot be used to train any commercial models, but can be used in personal and research contexts.*
 

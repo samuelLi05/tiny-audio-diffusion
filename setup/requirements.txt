@@ -9,12 +9,14 @@ wandb
 auraloss
 yt-dlp
 datasets
+huggingface_hub
 pyloudnorm
 einops
 omegaconf
 rich
 plotly
 librosa
+soundfile
 transformers
 eng-to-ipa
 ema-pytorch
