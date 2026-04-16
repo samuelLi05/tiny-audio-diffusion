@@ -27,6 +27,8 @@ gradio
 k-diffusion
 v-diffusion-pytorch
 
+boxsdk>=10
+
 audio-diffusion-pytorch==0.1.3
 audio-encoders-pytorch
 audio-data-pytorch
