@@ -127,7 +127,6 @@ def main() -> None:
     destination_root.mkdir(parents=True, exist_ok=True)
 
     print(f"Destination root: {destination_root}")
-    print("Raw archives will be written without extraction or post-processing.")
 
     box_client = build_box_client(args.box_access_token) if args.box_access_token else None
 
