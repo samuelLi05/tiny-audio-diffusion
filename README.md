@@ -189,6 +189,49 @@ The Nsynth baseline in this repository uses [jg583/NSynth](https://huggingface.c
 
 ***Note:*** *For appropriately diverse models, larger datasets should be used to avoid memorization of training data.*
 
+### Conditional NSynth Workflow (Box + One-Hot/Embedding)
+
+This repository includes a conditional training path for multiple instrument families using preprocessed waveform metadata (`clean`, `noisy`, class label, and conditioning vector).
+
+1. Download the processed dataset tree from Box (metadata + waveforms):
+
+```bash
+python scripts/download_box_processed_dataset.py --box-folder-id <BOX_FOLDER_ID> --destination data/nsynth_waveform_processed
+```
+
+2. Train the conditional model (CPU default; set `trainer.gpus=1` for GPU):
+
+```bash
+python train.py exp=nsynth_conditional_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl
+```
+
+3. For a larger 16GB VRAM profile (higher-capacity U-Net and longer sampling chains):
+
+```bash
+python train.py exp=nsynth_conditional_16gb_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl
+```
+
+The conditional experiment provides one-hot conditioning from metadata labels, optional learnable label-embedding conditioning (`model.conditioning_mode=label_embedding`), optional contrastive auxiliary loss between audio and label embedding spaces, optional low/high-pass filtering in the datamodule for source-isolation cleanup, and per-batch Mel spectrograms with class labels for inspection/logging.
+
+#### Quick Commands To Train Both Paths
+
+Use the launcher below to make training commands easy to run from the repo root:
+
+```bash
+scripts/train_conditional_models.sh onehot data/nsynth_waveform_processed/metadata/metadata.jsonl
+scripts/train_conditional_models.sh embedding data/nsynth_waveform_processed/metadata/metadata.jsonl
+scripts/train_conditional_models.sh both data/nsynth_waveform_processed/metadata/metadata.jsonl
+```
+
+You can append any extra Hydra overrides (for example `+trainer.fast_dev_run=1`) as additional arguments.
+
+Equivalent direct commands:
+
+```bash
+PYTHONPATH=. python train.py exp=nsynth_conditional_16gb_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl model.conditioning_mode=onehot model.use_contrastive_loss=false
+PYTHONPATH=. python train.py exp=nsynth_conditional_16gb_embedding_no_wandb datamodule.metadata_path=data/nsynth_waveform_processed/metadata/metadata.jsonl model.conditioning_mode=label_embedding model.use_contrastive_loss=true
+```
+
 ---
 
 ## Repository Structure

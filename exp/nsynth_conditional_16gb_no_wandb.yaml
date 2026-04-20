@@ -1,0 +1,104 @@
+# @package _global_
+
+# 16GB VRAM profile for conditional NSynth waveform diffusion.
+# This config targets stronger quality via larger U-Net capacity and longer sampling chains.
+
+module: main.diffusion_module
+batch_size: 6
+accumulate_grad_batches: 4
+num_workers: 4
+
+sampling_rate: 16000
+audio_channels: 1
+conditioning_dim: 3
+length: 16384
+val_log_every_n_steps: 250
+
+model:
+  _target_: ${module}.ConditionalModel
+  lr: 8e-5
+  lr_beta1: 0.95
+  lr_beta2: 0.999
+  lr_eps: 1e-6
+  lr_weight_decay: 1e-3
+  ema_beta: 0.995
+  ema_power: 0.7
+
+  audio_channels: ${audio_channels}
+  conditioning_dim: ${conditioning_dim}
+  conditioning_mode: onehot # onehot | label_embedding
+  conditioning_dropout: 0.1
+  num_classes: ${conditioning_dim}
+  label_embedding_dim: 64
+
+  use_contrastive_loss: true
+  contrastive_weight: 0.05
+  contrastive_temperature: 0.1
+  contrastive_projection_dim: 128
+
+  model:
+    _target_: audio_diffusion_pytorch.DiffusionModel
+    net_t:
+      _target_: ${module}.UNetT
+    in_channels: 4 # audio_channels + conditioning_dim
+    channels: [96, 96, 192, 192, 320, 320, 512, 512]
+    factors: [1, 2, 2, 2, 2, 2, 2, 2]
+    items: [2, 2, 2, 2, 2, 2, 4, 4]
+    attentions: [0, 0, 0, 1, 1, 1, 1, 1]
+    attention_heads: 8
+    attention_features: 256
+
+datamodule:
+  _target_: ${module}.NSynthConditionalDatamodule
+  metadata_path: ${data_dir}/nsynth_waveform_box/metadata/metadata.jsonl
+  batch_size: ${batch_size}
+  num_workers: ${num_workers}
+  pin_memory: True
+  include_spectrogram: True
+  sample_rate: ${sampling_rate}
+  target_length: ${length}
+  n_fft: 1024
+  hop_length: 256
+  n_mels: 128
+  highpass_hz: 40.0
+  lowpass_hz: null
+
+callbacks:
+  rich_progress_bar:
+    _target_: pytorch_lightning.callbacks.TQDMProgressBar
+
+  model_checkpoint:
+    _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    monitor: "valid_loss"
+    save_top_k: 1
+    save_last: True
+    mode: "min"
+    verbose: False
+    dirpath: ${logs_dir}/ckpts/${now:%Y-%m-%d-%H-%M-%S}
+    filename: '{epoch:02d}-{valid_loss:.3f}'
+
+  model_summary:
+    _target_: pytorch_lightning.callbacks.RichModelSummary
+    max_depth: 2
+
+  audio_samples_logger:
+    _target_: ${module}.SampleLogger
+    num_items: 3
+    channels: ${audio_channels}
+    sampling_rate: ${sampling_rate}
+    length: ${length}
+    sampling_steps: [200, 400]
+    use_ema_model: True
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  gpus: 1
+  precision: 16
+  num_sanity_val_steps: 0
+  min_epochs: 0
+  max_epochs: -1
+  enable_model_summary: False
+  log_every_n_steps: 1
+  check_val_every_n_epoch: null
+  val_check_interval: ${val_log_every_n_steps}
+  accumulate_grad_batches: ${accumulate_grad_batches}
