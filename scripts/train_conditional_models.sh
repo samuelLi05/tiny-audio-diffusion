@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-MODE="${1:-both}"
+MODE="${1:-embedding}"
 METADATA_PATH="${2:-data/nsynth_waveform_box/metadata/metadata.jsonl}"
 EXTRA_ARGS=("${@:3}")
 export PYTHONPATH=.

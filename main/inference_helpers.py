@@ -40,6 +40,7 @@ class InferenceContext:
     audio_channels: int
     is_conditional: bool
     is_embedding_model: bool
+    metadata_path: Optional[str]
 
 
 _TOKEN_PATTERN = re.compile(r"\$\{([^{}]+)\}")
@@ -138,6 +139,8 @@ def _build_core_model(model_configs: dict[str, Any]) -> DiffusionModel:
         diffusion_t=VDiffusion,
         sampler_t=VSampler,
     )
+    if "cross_attentions" in model_configs:
+        core_kwargs["cross_attentions"] = model_configs["cross_attentions"]
     if "embedding_features" in model_configs:
         core_kwargs["embedding_features"] = model_configs["embedding_features"]
     return DiffusionModel(**core_kwargs)
@@ -148,6 +151,7 @@ def load_inference_context(
     ckpt_path: str,
     *,
     conditioning_mode_override: Optional[str] = None,
+    metadata_path_override: Optional[str] = None,
     device: Optional[str] = None,
 ) -> InferenceContext:
     config = load_resolved_config(config_path)
@@ -230,11 +234,13 @@ def load_inference_context(
     model.load_state_dict(state_dict, strict=False)
 
     datamodule = None
+    resolved_metadata_path: Optional[str] = None
     if is_conditional:
         datamodule_cfg = config.get("datamodule", {})
         if str(datamodule_cfg.get("_target_", "")).endswith("NSynthConditionalDatamodule"):
+            resolved_metadata_path = metadata_path_override or datamodule_cfg["metadata_path"]
             datamodule = NSynthConditionalDatamodule(
-                metadata_path=datamodule_cfg["metadata_path"],
+                metadata_path=resolved_metadata_path,
                 batch_size=datamodule_cfg["batch_size"],
                 num_workers=datamodule_cfg["num_workers"],
                 pin_memory=datamodule_cfg.get("pin_memory", False),
@@ -263,6 +269,7 @@ def load_inference_context(
         audio_channels=audio_channels,
         is_conditional=is_conditional,
         is_embedding_model=is_embedding_model,
+        metadata_path=resolved_metadata_path,
     )
 
 
@@ -323,16 +330,19 @@ def resolve_reference_waveform(
     seed: int,
     reference_split: str,
     reference_index: Optional[int],
-    reference_pt_path: Optional[str],
+    reference_input_path: Optional[str] = None,
+    reference_pt_path: Optional[str] = None,
 ):
-    if reference_pt_path is not None:
-        waveform = load_waveform_pt(
-            reference_pt_path,
+    override_path = reference_input_path if reference_input_path is not None else reference_pt_path
+
+    if override_path is not None:
+        waveform = load_waveform_file(
+            override_path,
             target_length=context.sample_length,
             target_sample_rate=context.sample_rate,
             target_channels=context.audio_channels,
         )
-        return waveform, reference_pt_path, None
+        return waveform, override_path, None
 
     if context.datamodule is None:
         raise ValueError("No datamodule available to resolve a dataset reference waveform.")
@@ -372,6 +382,62 @@ def load_waveform_pt(
     else:
         waveform = loaded
 
+    return _normalize_waveform(
+        waveform,
+        target_length=target_length,
+        target_sample_rate=target_sample_rate,
+        source_sample_rate=source_sample_rate,
+        target_channels=target_channels,
+    )
+
+
+def load_waveform_file(
+    path: str,
+    *,
+    target_length: int,
+    target_sample_rate: Optional[int] = None,
+    target_channels: Optional[int] = None,
+) -> Tensor:
+    resolved = Path(path).expanduser().resolve()
+    suffix = resolved.suffix.lower()
+
+    if suffix in {".pt", ".pth"}:
+        return load_waveform_pt(
+            str(resolved),
+            target_length=target_length,
+            target_sample_rate=target_sample_rate,
+            target_channels=target_channels,
+        )
+
+    if suffix in {".wav", ".flac", ".mp3", ".ogg", ".m4a"}:
+        try:
+            waveform, source_sample_rate = torchaudio.load(str(resolved))
+        except Exception:
+            import soundfile as sf
+
+            audio_np, source_sample_rate = sf.read(str(resolved), always_2d=True, dtype="float32")
+            waveform = torch.from_numpy(audio_np).transpose(0, 1)
+        return _normalize_waveform(
+            waveform,
+            target_length=target_length,
+            target_sample_rate=target_sample_rate,
+            source_sample_rate=source_sample_rate,
+            target_channels=target_channels,
+        )
+
+    raise ValueError(
+        f"Unsupported reference file type for {resolved}. Use an audio file (e.g., .wav) or .pt/.pth tensor file."
+    )
+
+
+def _normalize_waveform(
+    waveform: Tensor,
+    *,
+    target_length: int,
+    target_sample_rate: Optional[int] = None,
+    source_sample_rate: Optional[int] = None,
+    target_channels: Optional[int] = None,
+) -> Tensor:
     audio = torch.as_tensor(waveform).detach().float()
     if audio.ndim == 1:
         audio = audio.unsqueeze(0)
@@ -429,7 +495,7 @@ def generate_unconditional_sample(
         device=context.model.device,
     ) * unconditional_noise_scale
 
-    if context.conditioning_mode == "onehot" and hasattr(context.model, "sample_conditioned"):
+    if hasattr(context.model, "sample_conditioned"):
         zero_conditioning = torch.zeros(
             (1, context.conditioning_dim),
             dtype=torch.float32,

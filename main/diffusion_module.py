@@ -68,7 +68,7 @@ class Model(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            list(self.model.parameters()),
+            [p for p in self.parameters() if p.requires_grad],
             lr=self.lr,
             betas=(self.lr_beta1, self.lr_beta2),
             eps=self.lr_eps,
@@ -166,10 +166,15 @@ class ConditionalModel(Model):
                     "Need conditioning tensor or class ids for onehot conditioning."
                 )
         elif self.conditioning_mode == "label_embedding":
-            if class_ids is None:
-                raise ValueError("label_embedding mode requires class ids in the batch.")
-            embed = self.class_embedding(class_ids)
-            cond = self.embedding_to_conditioning(embed)
+            if conditioning is not None:
+                cond = conditioning
+            elif class_ids is not None:
+                embed = self.class_embedding(class_ids)
+                cond = self.embedding_to_conditioning(embed)
+            else:
+                raise ValueError(
+                    "Need conditioning tensor or class ids for label_embedding conditioning."
+                )
         else:
             raise ValueError(f"Unsupported conditioning_mode: {self.conditioning_mode}")
 
@@ -330,10 +335,15 @@ class EmbeddingConditionalModel(Model):
                     "Need conditioning tensor or class ids for onehot conditioning."
                 )
         elif self.conditioning_mode == "label_embedding":
-            if class_ids is None:
-                raise ValueError("label_embedding mode requires class ids in the batch.")
-            embed = self.class_embedding(class_ids)
-            cond = self.embedding_to_conditioning(embed)
+            if conditioning is not None:
+                cond = conditioning
+            elif class_ids is not None:
+                embed = self.class_embedding(class_ids)
+                cond = self.embedding_to_conditioning(embed)
+            else:
+                raise ValueError(
+                    "Need conditioning tensor or class ids for label_embedding conditioning."
+                )
         else:
             raise ValueError(f"Unsupported conditioning_mode: {self.conditioning_mode}")
 
@@ -358,6 +368,12 @@ class EmbeddingConditionalModel(Model):
         loss_text_to_audio = F.cross_entropy(logits.transpose(0, 1), targets)
         return 0.5 * (loss_audio_to_text + loss_text_to_audio)
 
+    def _format_embedding(self, cond: Tensor) -> Tensor:
+        # Cross-attention expects [batch, sequence, features].
+        if cond.ndim == 2:
+            return cond.unsqueeze(1)
+        return cond
+
     def _unpack_conditional_batch(self, batch: dict[str, Any]):
         clean_wave = batch["Clean Waveform"]
         conditioning = batch.get("Conditioning")
@@ -371,6 +387,7 @@ class EmbeddingConditionalModel(Model):
     def training_step(self, batch, batch_idx):
         clean_wave, conditioning, class_ids = self._unpack_conditional_batch(batch)
         cond = self._encode_conditioning(conditioning, class_ids)
+        cond = self._format_embedding(cond)
 
         diffusion_loss = self.model(clean_wave, embedding=cond)
         loss = diffusion_loss
@@ -388,6 +405,7 @@ class EmbeddingConditionalModel(Model):
     def validation_step(self, batch, batch_idx):
         clean_wave, conditioning, class_ids = self._unpack_conditional_batch(batch)
         cond = self._encode_conditioning(conditioning, class_ids)
+        cond = self._format_embedding(cond)
 
         loss = self.model_ema(clean_wave, embedding=cond)
         self.log("valid_loss", loss, sync_dist=True)
@@ -402,7 +420,8 @@ class EmbeddingConditionalModel(Model):
         class_ids: Optional[Tensor] = None,
         use_ema_model: bool = True,
     ) -> Tensor:
-        cond = self._encode_conditioning(conditioning, class_ids).to(noise.device)
+        cond = self._encode_conditioning(conditioning, class_ids)
+        cond = self._format_embedding(cond).to(noise.device)
         model = self.model_ema.ema_model if use_ema_model else self.model
         return model.sample(noise, num_steps=num_steps, embedding=cond)
 
