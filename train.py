@@ -25,6 +25,25 @@ def main(config: DictConfig) -> None:
     log.info(f"Instantiating datamodule <{config.datamodule._target_}>.")
     datamodule = hydra.utils.instantiate(config.datamodule, _convert_="partial")
 
+    if hasattr(datamodule, "class_to_index"):
+        datamodule.setup(stage="fit")
+        num_classes = len(getattr(datamodule, "class_to_index", {}))
+        if num_classes > 0:
+            with open_dict(config):
+                if config.get("conditioning_dim") != num_classes:
+                    log.info(
+                        "Detected %s classes from metadata; overriding conditioning_dim.",
+                        num_classes,
+                    )
+                config.conditioning_dim = num_classes
+
+                if "model" in config:
+                    config.model.conditioning_dim = num_classes
+                    if "num_classes" in config.model:
+                        config.model.num_classes = num_classes
+                    if "model" in config.model and "embedding_features" in config.model.model:
+                        config.model.model.embedding_features = num_classes
+
     # Initialize model
     log.info(f"Instantiating model <{config.model._target_}>.")
     model = hydra.utils.instantiate(config.model, _convert_="partial")

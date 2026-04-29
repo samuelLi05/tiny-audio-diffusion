@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +22,6 @@ from main.diffusion_module import (
     Model,
     NSynthConditionalDatamodule,
 )
-
-DEFAULT_CLASS_NAMES = ["bass", "guitar", "keyboard"]
 
 
 @dataclass
@@ -146,6 +145,41 @@ def _build_core_model(model_configs: dict[str, Any]) -> DiffusionModel:
     return DiffusionModel(**core_kwargs)
 
 
+def _class_names_from_context(
+    datamodule: Optional[NSynthConditionalDatamodule],
+    metadata_path: Optional[str],
+    conditioning_dim: int,
+) -> list[str]:
+    if datamodule is not None and datamodule.class_to_index:
+        return [
+            name
+            for name, _ in sorted(datamodule.class_to_index.items(), key=lambda item: item[1])
+        ]
+
+    if metadata_path is not None:
+        metadata_file = Path(metadata_path).expanduser().resolve()
+        if metadata_file.exists():
+            classes: set[str] = set()
+            with metadata_file.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    class_name = row.get("class")
+                    if class_name is not None:
+                        classes.add(str(class_name))
+            if classes:
+                return sorted(classes)
+
+    if conditioning_dim > 0:
+        raise ValueError(
+            "Unable to infer class names from metadata. "
+            "Provide a valid metadata jsonl via datamodule.metadata_path or metadata_path_override."
+        )
+
+    return []
+
+
 def load_inference_context(
     config_path: str,
     ckpt_path: str,
@@ -169,7 +203,7 @@ def load_inference_context(
     audio_channels = int(config.get("audio_channels", model_configs.get("in_channels", 1)))
     sample_rate = int(config.get("sampling_rate", 16000))
     sample_length = int(config.get("length", 16384))
-    class_names = list(DEFAULT_CLASS_NAMES)
+    class_names: list[str] = []
 
     core_model = _build_core_model(model_configs)
 
@@ -254,6 +288,8 @@ def load_inference_context(
                 target_length=datamodule_cfg.get("target_length", sample_length),
             )
             datamodule.setup()
+
+    class_names = _class_names_from_context(datamodule, resolved_metadata_path, conditioning_dim)
 
     return InferenceContext(
         config_path=config_path,

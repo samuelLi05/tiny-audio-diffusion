@@ -104,6 +104,12 @@ class NSynthWaveformDataset(Dataset):
             f"Expected explicit metadata path or a local PT under waveforms/{subdir}/..."
         )
 
+    def _resolve_waveform_path_optional(self, row: dict[str, Any], key: str) -> Optional[Path]:
+        try:
+            return self._resolve_waveform_path(row, key)
+        except FileNotFoundError:
+            return None
+
     def _normalize_waveform(
         self,
         wave: torch.Tensor,
@@ -141,12 +147,12 @@ class NSynthWaveformDataset(Dataset):
         row = self.rows[index]
 
         clean_path = self._resolve_waveform_path(row, "clean_waveform_path")
-        noisy_path = self._resolve_waveform_path(row, "noisy_waveform_path")
+        noisy_path = self._resolve_waveform_path_optional(row, "noisy_waveform_path")
 
         source_sample_rate = row.get("sample_rate")
 
         clean_waveform = torch.load(clean_path, map_location="cpu")
-        noisy_waveform = torch.load(noisy_path, map_location="cpu")
+        noisy_waveform = torch.load(noisy_path, map_location="cpu") if noisy_path else clean_waveform
         clean_waveform = self._normalize_waveform(clean_waveform, source_sample_rate)
         noisy_waveform = self._normalize_waveform(noisy_waveform, source_sample_rate)
 
@@ -169,5 +175,5 @@ class NSynthWaveformDataset(Dataset):
             "Class": row["class"],
             "Source Sample Rate": source_sample_rate,
             "Clean Path": str(clean_path),
-            "Noisy Path": str(noisy_path),
+            "Noisy Path": str(noisy_path) if noisy_path is not None else None,
         }
