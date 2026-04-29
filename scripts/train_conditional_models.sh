@@ -17,12 +17,16 @@ BASE_CMD=(python train.py datamodule.metadata_path="$METADATA_PATH")
 
 run_conditional_onehot() {
   echo "Starting conditional diffusion training (onehot)..."
-  "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_no_wandb model.conditioning_mode=onehot model.use_contrastive_loss=false "${EXTRA_ARGS[@]}"
+  # Legacy no-wandb command:
+  # "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_no_wandb model.conditioning_mode=onehot model.use_contrastive_loss=false "${EXTRA_ARGS[@]}"
+  "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_wandb model.conditioning_mode=onehot model.use_contrastive_loss=false "${EXTRA_ARGS[@]}"
 }
 
 run_embedding_contrastive() {
   echo "Starting embedding-conditioned + contrastive training..."
-  "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_embedding_no_wandb model.conditioning_mode=label_embedding model.use_contrastive_loss=true "${EXTRA_ARGS[@]}"
+  # Legacy no-wandb command:
+  # "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_embedding_no_wandb model.conditioning_mode=label_embedding model.use_contrastive_loss=true "${EXTRA_ARGS[@]}"
+  "${BASE_CMD[@]}" exp=nsynth_conditional_16gb_embedding_wandb model.conditioning_mode=label_embedding model.use_contrastive_loss=true "${EXTRA_ARGS[@]}"
 }
 
 case "$MODE" in
