@@ -191,6 +191,7 @@ def load_inference_context(
     config = load_resolved_config(config_path)
     pl_configs = config["model"]
     model_configs = config["model"]["model"]
+    datamodule_cfg = config.get("datamodule", {})
     model_target = str(config["model"].get("_target_", ""))
     is_embedding_model = "EmbeddingConditionalModel" in model_target
     is_conditional = ("ConditionalModel" in model_target) or is_embedding_model
@@ -204,6 +205,22 @@ def load_inference_context(
     sample_rate = int(config.get("sampling_rate", 16000))
     sample_length = int(config.get("length", 16384))
     class_names: list[str] = []
+
+    resolved_metadata_path: Optional[str] = None
+    if is_conditional and str(datamodule_cfg.get("_target_", "")).endswith("NSynthConditionalDatamodule"):
+        resolved_metadata_path = metadata_path_override or datamodule_cfg["metadata_path"]
+        metadata_class_names = _class_names_from_context(None, resolved_metadata_path, 0)
+        if metadata_class_names:
+            inferred_dim = len(metadata_class_names)
+            conditioning_dim = inferred_dim
+            config["conditioning_dim"] = inferred_dim
+            pl_configs["conditioning_dim"] = inferred_dim
+            pl_configs["num_classes"] = inferred_dim
+
+            if is_embedding_model:
+                model_configs["embedding_features"] = inferred_dim
+            else:
+                model_configs["in_channels"] = audio_channels + inferred_dim
 
     core_model = _build_core_model(model_configs)
 
@@ -268,11 +285,8 @@ def load_inference_context(
     model.load_state_dict(state_dict, strict=False)
 
     datamodule = None
-    resolved_metadata_path: Optional[str] = None
     if is_conditional:
-        datamodule_cfg = config.get("datamodule", {})
         if str(datamodule_cfg.get("_target_", "")).endswith("NSynthConditionalDatamodule"):
-            resolved_metadata_path = metadata_path_override or datamodule_cfg["metadata_path"]
             datamodule = NSynthConditionalDatamodule(
                 metadata_path=resolved_metadata_path,
                 batch_size=datamodule_cfg["batch_size"],
